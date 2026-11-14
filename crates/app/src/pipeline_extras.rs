@@ -22,7 +22,7 @@ fn catalog(cfg: &ConfigStore) -> &'static services::i18n::Catalog {
         services::i18n::Language::from_config(
             &cfg.get("Interface", "language")
                 .and_then(|v| v.as_str().map(str::to_owned))
-                .unwrap_or_else(|| "Auto".into()),
+                .unwrap_or_default(), // "" → zh_CN
         )
         .resolve(),
     )

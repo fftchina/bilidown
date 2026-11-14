@@ -91,19 +91,25 @@ impl LoginState {
     }
 
     /// Close the login dialog + run the shell's success hook. Callers are
-    /// async spawns with no `Window`, so route through the handle saved
-    /// in `open` (ticket 40: the dialog used to float forever after a
-    /// successful login).
-    fn finish_login(window: Option<&gpui_kit::gpui::AnyWindowHandle>, cx: &mut gpui_kit::App) {
-        if let Some(window) = window {
-            let _ = window.update(cx, |view, window, cx| {
-                if let Ok(shell) = view.downcast::<crate::ui::Shell>() {
-                    shell.update(cx, |shell, cx| {
-                        shell.on_login_success(window, cx);
-                    });
-                }
+    /// async spawns, so route through the handle saved in `open`.
+    /// Must be called OUTSIDE any `shell.update` lease (it re-enters the
+    /// shell via the window root, which is `gpui_kit::base::Root`, not
+    /// the Shell — ticket 40 regression: the old `downcast::<Shell>`
+    /// always failed, silently, leaving the dialog open after QR/SMS
+    /// success).
+    fn finish_login(
+        window: Option<&gpui_kit::gpui::AnyWindowHandle>,
+        shell: &gpui_kit::gpui::WeakEntity<crate::ui::Shell>,
+        cx: &mut gpui_kit::AsyncApp,
+    ) {
+        let Some(window) = window else {
+            return;
+        };
+        let _ = window.update(cx, |_, window, cx| {
+            let _ = shell.update(cx, |shell, cx| {
+                shell.on_login_success(window, cx);
             });
-        }
+        });
     }
 
     fn tr(cx: &Context<crate::ui::Shell>, context: &str, source: &str) -> String {
@@ -284,36 +290,53 @@ impl LoginState {
                     |_: tokio::task::JoinError| (Err(String::new()), state_fallback),
                     |(s, state)| (s, state),
                 );
-                let keep_going = shell.update(cx, |shell, cx| {
-                    if shell.login.generation != generation || !shell.login.is_open {
-                        return false;
-                    }
-                    match status {
-                        Ok(s) => {
-                            shell.login.model.qr_polled(s);
-                            if s == QRCodeScanStatus::Success {
-                                shell.set_auth_state(state, cx);
-                                let text = Self::tr(cx, CTX, "Successfully logged in via QR code");
-                                shell.login.model.login_success(text.clone());
-                                shell.login.toast = Some(text);
-                                Self::finish_login(window.as_ref(), cx);
-                                return false;
-                            }
-                            s != QRCodeScanStatus::Expired
+                // Poll verdict: stop-polling, stop-with-success (dialog
+                // close happens after the lease — finish_login re-enters
+                // the shell), or keep going.
+                enum PollStep {
+                    Continue,
+                    Stop,
+                    StopSuccess,
+                }
+                let step = shell
+                    .update(cx, |shell, cx| {
+                        if shell.login.generation != generation || !shell.login.is_open {
+                            return PollStep::Stop;
                         }
-                        Err(e) => {
-                            // transport hiccup: keep polling; surface the
-                            // first failure only to avoid spamming the
-                            // status line
-                            if shell.login.toast.is_none() {
-                                shell.login.toast = Some(e);
+                        match status {
+                            Ok(s) => {
+                                shell.login.model.qr_polled(s);
+                                if s == QRCodeScanStatus::Success {
+                                    shell.set_auth_state(state, cx);
+                                    let text =
+                                        Self::tr(cx, CTX, "Successfully logged in via QR code");
+                                    shell.login.model.login_success(text.clone());
+                                    shell.login.toast = Some(text);
+                                    return PollStep::StopSuccess;
+                                }
+                                if s == QRCodeScanStatus::Expired {
+                                    PollStep::Stop
+                                } else {
+                                    PollStep::Continue
+                                }
                             }
-                            true
+                            Err(e) => {
+                                // transport hiccup: keep polling; surface
+                                // the first failure only to avoid spamming
+                                // the status line
+                                if shell.login.toast.is_none() {
+                                    shell.login.toast = Some(e);
+                                }
+                                PollStep::Continue
+                            }
                         }
-                    }
-                });
-                match keep_going {
-                    Ok(true) => continue,
+                    })
+                    .unwrap_or(PollStep::Stop);
+                if matches!(step, PollStep::StopSuccess) {
+                    Self::finish_login(window.as_ref(), &shell, cx);
+                }
+                match step {
+                    PollStep::Continue => continue,
                     _ => break,
                 }
             }
@@ -493,18 +516,22 @@ impl LoginState {
                         .unwrap_or_else(|e| (Err(e), auth::AuthState::default()))
                 },
             );
+            let mut ok = false;
             let _ = shell.update(cx, |shell, cx| match result {
                 Ok(()) => {
                     shell.set_auth_state(state, cx);
                     let text = Self::tr(cx, CTX, "Successfully logged in via SMS");
                     shell.login.model.login_success(text.clone());
-                    Self::finish_login(window.as_ref(), cx);
+                    ok = true;
                 }
                 Err(e) => {
                     shell.login.model.fail(e.clone());
                     shell.login.toast = Some(e);
                 }
             });
+            if ok {
+                Self::finish_login(window.as_ref(), &shell, cx);
+            }
         })
         .detach();
     }
@@ -564,6 +591,7 @@ impl LoginState {
                     Err(e) => (Err(e), auth::AuthState::default()),
                 },
             );
+            let mut ok = false;
             let _ = shell.update(cx, |shell, cx| {
                 use auth::login::{CookieLoginError, CookieLoginOutcome};
                 match result {
@@ -573,7 +601,7 @@ impl LoginState {
                         shell.login.cookie.accept();
                         shell.login.model.login_success(text.clone());
                         shell.login.toast = Some(text);
-                        Self::finish_login(window.as_ref(), cx);
+                        ok = true;
                     }
                     Ok(CookieLoginOutcome::Invalid) => {
                         let msg = Self::tr(cx, CTX_ERR, "Cookies are invalid or expired");
@@ -602,6 +630,9 @@ impl LoginState {
                 }
                 cx.notify();
             });
+            if ok {
+                Self::finish_login(window.as_ref(), &shell, cx);
+            }
         })
         .detach();
     }

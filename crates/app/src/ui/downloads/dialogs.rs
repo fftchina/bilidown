@@ -27,7 +27,10 @@ fn language() -> services::i18n::ResolvedLanguage {
         .and_then(|c| c.get("Interface", "language"));
     let lang = match raw.as_ref().and_then(|v| v.as_str()) {
         Some(s) => services::i18n::Language::from_config(s),
-        None => services::i18n::Language::Auto,
+        // "" → Simplified Chinese (the app default; the old `Auto`
+        // fallback rendered the downloads screen in English on an
+        // English-locale system while the shell stayed Chinese).
+        None => services::i18n::Language::from_config(""),
     };
     lang.resolve()
 }

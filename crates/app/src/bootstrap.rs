@@ -191,7 +191,7 @@ async fn driver_loop(config: Arc<ConfigStore>, manager: Arc<TaskManager>) {
                                 &config
                                     .get("Interface", "language")
                                     .and_then(|v| v.as_str().map(str::to_owned))
-                                    .unwrap_or_else(|| "Auto".into()),
+                                    .unwrap_or_default(), // "" → zh_CN
                             )
                             .resolve(),
                         );

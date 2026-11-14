@@ -37,6 +37,10 @@ pub struct ShellI18n {
 
 impl Global for ShellI18n {}
 
+// Quit action: menu item + `cmd-q` binding (macOS app menu, set and
+// globally handled in `main.rs`).
+gpui_kit::gpui::actions!(bilidown, [QuitApp]);
+
 /// One clipboard read handed to the monitor from a UI-thread poll.
 struct PolledClipboard(Option<String>);
 
@@ -387,6 +391,16 @@ impl Shell {
         self.login.open(window, cx);
     }
 
+    /// Post-queue jump: land on the Downloads screen with the
+    /// "Downloading" tab active (Python lands on the download page's
+    /// active-tasks view).
+    pub fn jump_to_downloading(&mut self, cx: &mut Context<Self>) {
+        self.screen = Screen::Downloads;
+        self.downloads
+            .toggle_tab(downloads::screen_state::DownloadsTab::Downloading);
+        self.downloads.refresh(cx);
+    }
+
     /// Any login success: close the login (and possibly stacked cookie)
     /// dialogs (QR/SMS paths never did — ticket 40), flip the shell
     /// flag, and refresh the account uname for the footer tooltip.
@@ -569,7 +583,14 @@ impl Render for Shell {
         div()
             .size_full()
             .flex()
+            .flex_col()
             .child(
+                div()
+                    .id("shell-main-row")
+                    .flex()
+                    .flex_1()
+                    .min_h_0()
+                    .child(
                 // Hand-drawn icon rail (ticket 5): kit `Sidebar` pins a
                 // 48px collapsed rail with horizontal items — too small
                 // for icons stacked above their labels, so the app draws
@@ -718,6 +739,49 @@ impl Render for Shell {
                 // poll re-queries merge-stage rows. Zero-size; dies
                 // with the shell.
                 self.downloads_tick.clone(),
+            )
+            )
+            .child(
+                // Login status footer (Python MainWindow status bar):
+                // account uname bottom-right when logged in, the
+                // log-in hint otherwise. Click opens the login dialog.
+                div()
+                    .id("shell-login-footer")
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_end()
+                    .gap_1p5()
+                    .px_3()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .text_color(cx.theme().muted_foreground)
+                    .child(
+                        gpui_kit::component::Icon::new(login_icon)
+                            .size_3()
+                            .text_color(cx.theme().muted_foreground),
+                    )
+                    .child(
+                        Label::new(if is_login {
+                            if uname.is_empty() {
+                                c.tr("MainWindow", "Logged in").to_owned()
+                            } else {
+                                uname.clone()
+                            }
+                        } else {
+                            c.tr(
+                                "MainWindow",
+                                "Click the avatar to log in for full functionality.",
+                            )
+                            .to_owned()
+                        })
+                        .text_size(px(11.)),
+                    )
+                    .on_click(cx.listener(|shell, _, window, cx| {
+                        if !shell.login.is_login {
+                            shell.open_login(window, cx);
+                        }
+                    })),
             )
         // The login dialogs are window-managed; nothing login-related
         // renders in the shell tree.

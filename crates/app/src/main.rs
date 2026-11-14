@@ -46,7 +46,7 @@ struct ConfigGlobal(parking_lot::Mutex<ConfigStore>);
 impl Global for ConfigGlobal {}
 
 /// Save the window geometry (Python `save_window_state`), then flush config.
-fn persist_window_state(window: &mut Window, cx: &mut App) {
+pub(crate) fn persist_window_state(window: &mut Window, cx: &mut App) {
     let Some(global) = cx.try_global::<ConfigGlobal>() else {
         return;
     };
@@ -215,6 +215,32 @@ pub fn run() -> anyhow::Result<()> {
                     });
                 })
                 .expect("window gone");
+
+            // --- macOS app menu + Cmd+Q quit -------------------------------
+            // gpui installs no default menu bar, so without this macOS
+            // has no Quit item and Cmd+Q is a no-op. The menu item's
+            // key equivalent comes from the keymap binding below.
+            // Handling via `App::on_action` (global listener), not a
+            // div handler: macOS validates menu items through
+            // `is_action_available`, which counts global listeners —
+            // a div-level handler alone can leave the item disabled,
+            // making Cmd+Q silently dead.
+            #[cfg(target_os = "macos")]
+            {
+                use gpui_kit::gpui::{KeyBinding, Menu, MenuItem};
+                cx.bind_keys([KeyBinding::new("cmd-q", ui::QuitApp, None)]);
+                cx.set_menus([Menu {
+                    name: config::APP_NAME.into(),
+                    items: vec![MenuItem::action("Quit bilidown", ui::QuitApp)],
+                    disabled: false,
+                }]);
+                let window_handle = window;
+                cx.on_action(move |_: &ui::QuitApp, cx| {
+                    let _ =
+                        window_handle.update(cx, |_, window, cx| persist_window_state(window, cx));
+                    cx.quit();
+                });
+            }
 
             // --- tray + wake pump ------------------------------------------
             // tray-icon/muda deliver on background threads; drain both

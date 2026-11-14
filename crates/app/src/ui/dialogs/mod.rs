@@ -37,7 +37,7 @@ pub fn active_catalog(cfg: &config::ConfigStore) -> &'static Catalog {
     let lang = cfg
         .get("Interface", "language")
         .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "Auto".into());
+        .unwrap_or_default(); // "" → Simplified Chinese (the app default)
     i18n::catalog(i18n::Language::from_config(&lang).resolve())
 }
 

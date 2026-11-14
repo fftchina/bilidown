@@ -11,7 +11,6 @@
 
 use super::model::ParseViewModel;
 use crate::ui::download_options;
-use crate::ui::Screen;
 use crate::ui::Shell;
 use config::ConfigStore;
 use gpui_kit::base::Disableable;
@@ -139,8 +138,7 @@ impl ParseScreen {
                                 let queued =
                                     shell.parse.on_download(window, shell.manager.clone(), cx);
                                 if queued > 0 {
-                                    shell.screen = Screen::Downloads;
-                                    shell.downloads.refresh(cx);
+                                    shell.jump_to_downloading(cx);
                                 }
                             })),
                     ),
@@ -943,6 +941,7 @@ impl ParseScreen {
         let gate = Self::download_gate(ConfigStore::open().as_ref().ok());
         let shell = cx.entity();
         if gate == DownloadGate::Dialog {
+            let window_handle = window.window_handle();
             let queue = move |shell: &mut Shell, cx: &mut Context<Shell>| {
                 let episode_data = shell.parse.episode_data.clone();
                 let queued = Self::queue_checked(
@@ -953,8 +952,19 @@ impl ParseScreen {
                     cx,
                 );
                 if queued > 0 {
-                    shell.screen = Screen::Downloads;
-                    shell.downloads.refresh(cx);
+                    shell.jump_to_downloading(cx);
+                } else if !shell.parse.status.is_empty() {
+                    // Nothing queued (e.g. all checked videos already
+                    // exist as duplicates) — surface the status line as
+                    // a notification so the confirm click never looks
+                    // like a silent no-op.
+                    let msg = shell.parse.status.clone();
+                    let _ = window_handle.update(cx, |_, window, cx| {
+                        window.push_notification(
+                            gpui_kit::component::notification::Notification::warning(msg),
+                            cx,
+                        );
+                    });
                 }
             };
             self.open_download_options_dialog(
@@ -1140,8 +1150,7 @@ impl ParseScreen {
                             &[("count", &result.created.len().to_string())],
                         );
                         if !result.created.is_empty() {
-                            shell.screen = Screen::Downloads;
-                            shell.downloads.refresh(cx);
+                            shell.jump_to_downloading(cx);
                         }
                     }
                     Err(e) => {
@@ -1283,8 +1292,7 @@ impl ParseScreen {
                                                 }
                                             );
                                             if !result.created.is_empty() {
-                                                shell.screen = Screen::Downloads;
-                                                shell.downloads.refresh(cx);
+                                                shell.jump_to_downloading(cx);
                                             }
                                         }
                                         Err(e) => {

@@ -181,7 +181,7 @@ PLATFORM_MATRIX = ["windows-latest", "macos-latest", "ubuntu-latest"]
 EXPECTED_ARTIFACTS = {
     "windows": [".exe", ".zip"],
     "macos": [".dmg"],
-    "linux": [".AppImage"],
+    "linux": [".deb"],
 }
 
 CHECKS = []

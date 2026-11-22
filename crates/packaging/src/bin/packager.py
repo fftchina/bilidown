@@ -290,6 +290,24 @@ cd "$APPDIR"
 exec ./bilidown "$@"
 """
 
+DEB_CONTROL = """Package: bilidown
+Version: {version}
+Section: utils
+Priority: optional
+Architecture: {arch}
+Maintainer: bilidown contributors
+Homepage: https://github.com/fftchina/bilidown
+Description: cross-platform Bilibili video downloader
+ Open source downloader for Bilibili with multithreaded transfers,
+ audio/video muxing and danmaku metadata support.
+"""
+
+DEB_LAUNCHER = """#!/bin/sh
+# The GPUI app resolves bundle/ffmpeg relative to its working directory.
+cd /usr/lib/bilidown || exit 1
+exec ./bilidown "$@"
+"""
+
 
 def package_linux(args: argparse.Namespace) -> list[Path]:
     out = Path(args.out)
@@ -335,10 +353,45 @@ def package_linux(args: argparse.Namespace) -> list[Path]:
     apprun.write_text(APPRUN, encoding="utf-8")
     ensure_executable(apprun)
 
-    if not args.isolate:
+    artifacts = [appdir]
+    if args.deb:
+        artifacts.append(build_deb(out, appdir, args))
+    if args.isolate:
+        artifacts.append(build_appimage(out, appdir, args))
+    else:
         print("skipped AppImage: pass --isolate on a runner with appimagetool")
-        return [appdir]
-    return [build_appimage(out, appdir, args)]
+    return artifacts
+
+
+def build_deb(out: Path, appdir: Path, args: argparse.Namespace) -> Path:
+    """Build a .deb from the staged AppDir (requires dpkg-deb on Linux)."""
+    if not shutil.which("dpkg-deb"):
+        raise SystemExit("dpkg-deb is required to build the .deb package")
+    arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(gnu_arch(), gnu_arch())
+    root = out / "bilidown.deb-root"
+    if root.exists():
+        shutil.rmtree(root)
+    (root / "DEBIAN").mkdir(parents=True)
+    (root / "DEBIAN" / "control").write_text(
+        DEB_CONTROL.format(version=args.version, arch=arch), encoding="utf-8"
+    )
+    # AppDir/usr already carries lib/bilidown (the binary, bundle/ffmpeg and
+    # LICENSE) plus share/{applications,icons,metainfo}.
+    shutil.copytree(appdir / "usr", root / "usr", dirs_exist_ok=True)
+    bindir = root / "usr" / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    launcher = bindir / "bilidown"
+    launcher.write_text(DEB_LAUNCHER, encoding="utf-8")
+    ensure_executable(launcher)
+    target = out / f"bilidown_{args.version}_linux_{arch}.deb"
+    if target.exists():
+        target.unlink()
+    subprocess.run(
+        ["dpkg-deb", "-Zgzip", "--build", "--root-owner-group", str(root), str(target)],
+        check=True,
+    )
+    shutil.rmtree(root)
+    return target
 
 
 def build_appimage(out: Path, appdir: Path, args: argparse.Namespace) -> Path:
@@ -389,6 +442,11 @@ def main() -> int:
         "--isolate",
         action="store_true",
         help="also build the installer/dmg/AppImage (needs ISCC/create-dmg/appimagetool)",
+    )
+    ap.add_argument(
+        "--deb",
+        action="store_true",
+        help="linux: also build a .deb package (needs dpkg-deb)",
     )
     args = ap.parse_args()
 

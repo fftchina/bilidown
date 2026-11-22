@@ -116,6 +116,9 @@ jobs:
 
   macos-build:
     needs: get-version
+    # macOS dmg is optional for this release channel; never block publishing
+    # the Windows portable/installer and Linux deb artifacts.
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -197,13 +200,13 @@ jobs:
           python3 crates/packaging/src/bin/packager.py linux \
             --version "$VERSION_NAME" \
             --out dist \
-            --isolate
+            --deb
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7
         with:
           name: rust-linux-artifacts
-          path: dist/bilidown_*_linux_*.AppImage
+          path: dist/bilidown_*_linux_*.deb
 
   packaging-checks:
     needs: get-version
@@ -220,7 +223,7 @@ jobs:
 
   publish:
     if: github.event_name != 'workflow_dispatch'
-    needs: [get-version, windows-build, macos-build, linux-build, packaging-checks]
+    needs: [get-version, windows-build, linux-build, packaging-checks]
     env:
       VERSION_NAME: ${{ needs.get-version.outputs.VERSION_NAME }}
       IS_PRERELEASE: ${{ needs.get-version.outputs.IS_PRERELEASE }}
@@ -242,13 +245,27 @@ jobs:
       - name: List downloaded artifacts
         run: ls -la release-artifacts
 
+      - name: Generate checksums
+        run: |
+          cd release-artifacts
+          rm -f SHA256SUMS
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
       - name: Upload to Release
         uses: softprops/action-gh-release@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           name: v${{ env.VERSION_NAME }}
-          body: Rust rewrite build (v2.21.0 line).
+          body: |
+            Automated build of the Rust app:
+
+            - `bilidown_<version>_windows_x64_portable.zip` - portable, no installation needed
+            - `bilidown_<version>_windows_x64.exe` - Windows installer (Inno Setup)
+            - `bilidown_<version>_linux_amd64.deb` - Debian/Ubuntu package
+
+            `SHA256SUMS` contains checksums for every asset.
           make_latest: ${{ env.IS_PRERELEASE != 'true' }}
           draft: false
           prerelease: ${{ env.IS_PRERELEASE == 'true' }}
